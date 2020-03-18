@@ -100,10 +100,7 @@ import com.orientechnologies.orient.core.storage.index.engine.OHashTableIndexEng
 import com.orientechnologies.orient.core.storage.index.engine.OSBTreeIndexEngine;
 import com.orientechnologies.orient.core.storage.index.sbtreebonsai.local.OSBTreeBonsaiLocal;
 import com.orientechnologies.orient.core.storage.ridbag.sbtree.*;
-import com.orientechnologies.orient.core.tx.OTransactionAbstract;
-import com.orientechnologies.orient.core.tx.OTransactionIndexChanges;
-import com.orientechnologies.orient.core.tx.OTransactionIndexChangesPerKey;
-import com.orientechnologies.orient.core.tx.OTransactionInternal;
+import com.orientechnologies.orient.core.tx.*;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -1277,7 +1274,6 @@ public abstract class OAbstractPaginatedStorage extends OStorageAbstract
    * not deleted - length of content is provided in above entity</li> </ol>
    *
    * @param lsn LSN from which we should find changed records
-   *
    * @see OGlobalConfiguration#STORAGE_TRACK_CHANGED_RECORDS_IN_WAL
    */
   public OBackgroundDelta recordsChangedAfterLSN(final OLogSequenceNumber lsn, final OCommandOutputListener outputListener) {
@@ -1390,11 +1386,11 @@ public abstract class OAbstractPaginatedStorage extends OStorageAbstract
     }
   }
 
-  private List<OTransactionData> extractTransactionsFromWal(Set<byte[]> transactionsMetadata) {
+  public OBackgroundNewDelta extractTransactionsFromWal(List<OTransactionId> transactionsMetadata) {
     List<OTransactionData> finished = new ArrayList<>();
     stateLock.acquireReadLock();
     try {
-      Set<byte[]> transactionsToRead = new HashSet<>(transactionsMetadata);
+      Set<OTransactionId> transactionsToRead = new HashSet<>(transactionsMetadata);
       // we iterate till the last record is contained in wal at the moment when we call this method
       OLogSequenceNumber beginLsn = writeAheadLog.end();
       Map<Long, OTransactionData> units = new HashMap<>();
@@ -1420,12 +1416,13 @@ public abstract class OAbstractPaginatedStorage extends OStorageAbstract
 
             if (record instanceof OAtomicUnitStartMetadataRecord) {
               byte[] meta = ((OAtomicUnitStartMetadataRecord) record).getMetadata();
+              OTxMetadataHolder data = OTxMetadataHolderImpl.read(meta);
               //TODO: This will not be a byte to byte compare, but should compare only the tx id not all status
-              if (transactionsToRead.contains(meta)) {
+              if (transactionsToRead.contains(data.getId())) {
                 long unitId = ((OAtomicUnitStartMetadataRecord) record).getOperationUnitId();
-                units.put(unitId, new OTransactionData(meta));
+                units.put(unitId, new OTransactionData(data.getId()));
               }
-              transactionsToRead.remove(meta);
+              transactionsToRead.remove(data.getId());
             }
             if (record instanceof OAtomicUnitEndRecord) {
               long opId = ((OAtomicUnitEndRecord) record).getOperationUnitId();
@@ -1440,7 +1437,7 @@ public abstract class OAbstractPaginatedStorage extends OStorageAbstract
             }
             if (transactionsToRead.isEmpty() && units.isEmpty()) {
               //all read stop scanning and return the transactions
-              return finished;
+              return new OBackgroundNewDelta(finished);
             }
           }
 
@@ -1449,14 +1446,12 @@ public abstract class OAbstractPaginatedStorage extends OStorageAbstract
       } finally {
         writeAheadLog.removeCutTillLimit(beginLsn);
       }
-
+      return new OBackgroundNewDelta(finished);
     } catch (final IOException e) {
       throw OException.wrapException(new OStorageException("Error of reading of records from  WAL"), e);
     } finally {
       stateLock.releaseReadLock();
     }
-
-    return finished;
   }
 
   protected void serializeDeltaContent(OutputStream stream, OCommandOutputListener outputListener, SortedSet<ORID> sortedRids,
@@ -1521,9 +1516,7 @@ public abstract class OAbstractPaginatedStorage extends OStorageAbstract
    * This method finds all the records changed in the last X transactions.
    *
    * @param maxEntries Maximum number of entries to check back from last log.
-   *
    * @return A set of record ids of the changed records
-   *
    * @see OGlobalConfiguration#STORAGE_TRACK_CHANGED_RECORDS_IN_WAL
    */
   public Set<ORecordId> recordsChangedRecently(final int maxEntries) {
@@ -2146,7 +2139,6 @@ public abstract class OAbstractPaginatedStorage extends OStorageAbstract
    * Traditional commit that support already temporary rid and already assigned rids
    *
    * @param clientTx the transaction to commit
-   *
    * @return The list of operations applied by the transaction
    */
   @Override
@@ -2158,7 +2150,6 @@ public abstract class OAbstractPaginatedStorage extends OStorageAbstract
    * Commit a transaction where the rid where pre-allocated in a previous phase
    *
    * @param clientTx the pre-allocated transaction to commit
-   *
    * @return The list of operations applied by the transaction
    */
   @SuppressWarnings("UnusedReturnValue")
@@ -2177,7 +2168,6 @@ public abstract class OAbstractPaginatedStorage extends OStorageAbstract
    *
    * @param transaction the transaction to commit
    * @param allocated   true if the operation is pre-allocated commit
-   *
    * @return The list of operations applied by the transaction
    */
   private List<ORecordOperation> commit(final OTransactionInternal transaction, final boolean allocated) {
@@ -3261,9 +3251,7 @@ public abstract class OAbstractPaginatedStorage extends OStorageAbstract
    * @param key       the key to put the value under.
    * @param value     the value to put.
    * @param validator the operation validator.
-   *
    * @return {@code true} if the validator allowed the put, {@code false} otherwise.
-   *
    * @see OBaseIndexEngine.Validator#validate(Object, Object, Object)
    */
   @SuppressWarnings("UnusedReturnValue")
@@ -5046,7 +5034,6 @@ public abstract class OAbstractPaginatedStorage extends OStorageAbstract
    * Register the cluster internally.
    *
    * @param cluster OCluster implementation
-   *
    * @return The id (physical position into the array) of the new cluster just created. First is 0.
    */
   private int registerCluster(final OCluster cluster) {
