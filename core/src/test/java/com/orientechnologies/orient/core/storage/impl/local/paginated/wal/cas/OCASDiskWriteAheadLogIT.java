@@ -3699,6 +3699,17 @@ public class OCASDiskWriteAheadLogIT {
     wal.close();
   }
 
+  @Test
+  public void testIntegerOverflowNoException() throws Exception {
+    final OCASDiskWriteAheadLog wal = new OCASDiskWriteAheadLog("walTest", testDirectory, testDirectory,
+        Integer.MAX_VALUE, 64, Integer.MAX_VALUE-1, Integer.MAX_VALUE, 20,
+        true, Locale.US, -1, -1, 1000, true, false,
+        false, true, 10);
+    wal.close();
+    Assert.assertEquals("Integer overflow must not produce a negative number forcing a `doFlush`",
+        OCASDiskWriteAheadLog.DEFAULT_MAX_CACHE_SIZE, wal.maxCacheSize());
+  }
+
   private void checkThatSegmentsBellowAreRemoved(OCASDiskWriteAheadLog wal) {
     final OLogSequenceNumber begin = wal.begin();
 
